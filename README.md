@@ -2,6 +2,9 @@
 
 LintMind is a dark-themed code review web app built with React, Vite, Tailwind-style styling, Monaco Editor, and Gemini API integration.
 
+<img width="1915" height="835" alt="image" src="https://github.com/user-attachments/assets/b3a7b62b-4464-489a-82de-5a10986d7bbb" />
+
+
 ## Features
 
 - In-browser code editor powered by Monaco
