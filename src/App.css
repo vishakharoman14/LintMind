@@ -10,3 +10,9 @@ body{
   background-color: rgb(0, 0, 0);
   color:#fff
 }
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -89,6 +89,7 @@ const App = () => {
   const [selectedReviewType, setSelectedReviewType] = React.useState(reviewTypeOptions[0])
   const [code, setCode] = React.useState(sampleCode)
   const [results, setResults] = React.useState([])
+  const [loading, setLoading] = React.useState(false)
 
   const reviewCode = (source, reviewType) => {
     if (!source || !source.trim()) {
@@ -204,9 +205,109 @@ const App = () => {
     }
   }
 
-  const handleRunReview = () => {
-    const reviewResults = reviewCode(code, selectedReviewType.value)
-    setResults(reviewResults)
+  const handleRunReview = async () => {
+    if (!code || !code.trim()) {
+      setResults([{ type: 'info', message: 'Add code on the left and click Run Review.' }])
+      return
+    }
+
+    setLoading(true)
+    setResults([])
+
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+    if (!apiKey) {
+      setResults(reviewCode(code, selectedReviewType.value))
+      setLoading(false)
+      return
+    }
+
+    const prompt = `You are LintMind, an expert code reviewer. Analyze the following ${selectedLanguage.label} code with focus on ${selectedReviewType.label}.
+
+Return ONLY a raw JSON object. No markdown, no backticks, no explanation.
+{
+  "issues": [
+    {
+      "type": "error" | "warning" | "suggestion" | "info" | "success",
+      "message": "specific issue with a clear fix explained in one or two sentences"
+    }
+  ]
+}
+
+Rules:
+- "error" = critical bugs or security vulnerabilities
+- "warning" = bad practices or potential runtime issues
+- "suggestion" = improvements for readability or performance
+- "info" = general notes or TODO reminders
+- If code is clean, return: { "issues": [{ "type": "success", "message": "No issues found. Your code looks great!" }] }
+- Be specific, mention the exact variable, function, or line pattern causing the issue
+- Max 8 issues
+
+Code:
+${code}`
+
+    try {
+      const model = import.meta.env.VITE_GEMINI_MODEL || 'gemini-flash-latest'
+      const baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models'
+      const buildUrl = (targetModel) => `${baseUrl}/${targetModel}:generateContent`
+
+      let response = await fetch(buildUrl(model), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt,
+                },
+              ],
+            },
+          ],
+        }),
+      })
+
+      if (response.status === 404 && model !== 'text-bison-001') {
+        console.warn('Gemini model not found, retrying with text-bison-001')
+        response = await fetch(buildUrl('text-bison-001'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': apiKey,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: prompt,
+                  },
+                ],
+              },
+            ],
+          }),
+        })
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Gemini API error', response.status, errorText)
+        throw new Error(`Gemini API request failed (${response.status})`)
+      }
+
+      const data = await response.json()
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || data.candidates?.[0]?.output?.[0]?.content?.text || ''
+      const clean = text.replace(/```json|```/g, '').trim()
+      const parsed = JSON.parse(clean)
+      setResults(parsed.issues || [{ type: 'error', message: 'Gemini returned no issues.' }])
+    } catch (err) {
+      console.error(err)
+      setResults([{ type: 'error', message: 'Failed to connect to Gemini API. Check your API key and network.' }])
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -287,20 +388,27 @@ const App = () => {
           </div>
 
           <div className='space-y-3 overflow-y-auto max-h-[calc(100%-140px)] pr-2'>
-            {results.map((result, index) => {
-              const meta = getIssueMeta(result.type)
-              return (
-                <div key={`${result.type}-${index}`} style={{ ...meta.style, borderRadius: '16px', padding: '24px' }}>
-                  <div className='mb-4 flex items-center justify-between'>
-                    <span style={{ borderRadius: '999px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', padding: '6px 16px', fontSize: '11px', fontWeight: 600, letterSpacing: '0.05em', color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase' }}>
-                      {meta.label}
-                    </span>
-                    <span className='flex-shrink-0 text-xs font-medium uppercase tracking-wider text-white/60'>Item {index + 1}</span>
+            {loading ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px' }}>
+                <div style={{ width: '36px', height: '36px', border: '3px solid rgba(255,255,255,0.1)', borderTop: '3px solid #fcd34d', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                <p style={{ color: '#94a3b8', fontSize: '14px' }}>Analyzing your code...</p>
+              </div>
+            ) : (
+              results.map((result, index) => {
+                const meta = getIssueMeta(result.type)
+                return (
+                  <div key={`${result.type}-${index}`} style={{ ...meta.style, borderRadius: '16px', padding: '24px' }}>
+                    <div className='mb-4 flex items-center justify-between'>
+                      <span style={{ borderRadius: '999px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', padding: '6px 16px', fontSize: '11px', fontWeight: 600, letterSpacing: '0.05em', color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase' }}>
+                        {meta.label}
+                      </span>
+                      <span className='flex-shrink-0 text-xs font-medium uppercase tracking-wider text-white/60'>Item {index + 1}</span>
+                    </div>
+                    <p className='text-sm leading-6 text-gray-100'>{result.message}</p>
                   </div>
-                  <p className='text-sm leading-6 text-gray-100'>{result.message}</p>
-                </div>
-              )
-            })}
+                )
+              })
+            )}
           </div>
         </div>
       </div>
